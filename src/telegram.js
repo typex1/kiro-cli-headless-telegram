@@ -1,11 +1,12 @@
 /**
  * Telegram Adapter — connects Telegram Bot API to Kiro headless client.
  *
- * Responsibilities:
- *   - Receive messages from authorized users
- *   - Forward to Kiro via headless CLI
- *   - Send responses back, splitting long messages
- *   - Show typing indicator while Kiro processes
+ * Supports:
+ *   - Per-user conversation continuity (--resume)
+ *   - Long-term memory via MEMORY.md
+ *   - Bot commands: /new, /memory, /clear, /sessions, /help
+ *   - Voice transcription (Groq Whisper)
+ *   - Typing indicators
  */
 
 const TelegramBot = require("node-telegram-bot-api");
@@ -29,6 +30,15 @@ class TelegramAdapter {
   }
 
   start() {
+    // Register commands
+    this.bot.setMyCommands([
+      { command: "new", description: "Start a fresh conversation" },
+      { command: "memory", description: "Show what Kiro remembers about you" },
+      { command: "clear", description: "Clear long-term memory" },
+      { command: "sessions", description: "List saved chat sessions" },
+      { command: "help", description: "Show available commands" },
+    ]).catch(() => {});
+
     this.bot.on("message", (msg) => this._onMessage(msg));
     console.log("[telegram] Listening for messages...");
   }
@@ -67,6 +77,12 @@ class TelegramAdapter {
       return;
     }
 
+    // Handle commands
+    if (text.startsWith("/")) {
+      await this._handleCommand(chatId, userId, text);
+      return;
+    }
+
     // Prevent concurrent requests per user
     if (this.processing.has(userId)) {
       await this.bot.sendMessage(chatId, "⏳ Still working on your last message...");
@@ -84,7 +100,7 @@ class TelegramAdapter {
         4000
       );
 
-      const response = await this.kiro.prompt(text);
+      const response = await this.kiro.prompt(text, userId);
       clearInterval(typingInterval);
 
       await this._sendResponse(chatId, response || "_(no response)_");
@@ -94,6 +110,84 @@ class TelegramAdapter {
       await this.bot.sendMessage(chatId, `❌ Error: ${err.message}`);
     } finally {
       this.processing.delete(userId);
+    }
+  }
+
+  async _handleCommand(chatId, userId, text) {
+    const [cmd, ...args] = text.split(/\s+/);
+
+    switch (cmd) {
+      case "/new":
+      case "/start": {
+        this.processing.add(userId);
+        try {
+          await this.bot.sendChatAction(chatId, "typing");
+          const typingInterval = setInterval(
+            () => this.bot.sendChatAction(chatId, "typing").catch(() => {}),
+            4000
+          );
+
+          const greeting = args.length
+            ? args.join(" ")
+            : "Hello! I'm starting a fresh conversation. I'll check my memory for context about you.";
+
+          const response = await this.kiro.prompt(
+            `Read MEMORY.md first to recall what you know about me, then respond to: ${greeting}`,
+            userId,
+            { newSession: true }
+          );
+          clearInterval(typingInterval);
+
+          await this._sendResponse(chatId, "🔄 *New conversation started.*\n\n" + (response || "Ready!"));
+        } catch (err) {
+          await this.bot.sendMessage(chatId, `❌ Error starting new chat: ${err.message}`);
+        } finally {
+          this.processing.delete(userId);
+        }
+        break;
+      }
+
+      case "/memory": {
+        const memory = this.kiro.getMemory(userId);
+        await this._sendResponse(chatId, "🧠 *Long-term Memory:*\n\n" + memory);
+        break;
+      }
+
+      case "/clear": {
+        this.kiro.clearMemory(userId);
+        await this.bot.sendMessage(chatId, "🧹 Memory cleared. I'll start learning about you again.");
+        break;
+      }
+
+      case "/sessions": {
+        try {
+          const sessions = await this.kiro.listSessions(userId);
+          await this._sendResponse(chatId, "📋 *Saved Sessions:*\n\n" + sessions);
+        } catch {
+          await this.bot.sendMessage(chatId, "📋 No sessions found.");
+        }
+        break;
+      }
+
+      case "/help": {
+        await this.bot.sendMessage(chatId,
+          "🤖 *Kiro Telegram Bot*\n\n" +
+          "Just send me a message and I'll respond using Kiro AI.\n\n" +
+          "*Commands:*\n" +
+          "/new — Start a fresh conversation\n" +
+          "/memory — Show what I remember about you\n" +
+          "/clear — Clear my long-term memory\n" +
+          "/sessions — List saved chat sessions\n" +
+          "/help — Show this help\n\n" +
+          "💡 I remember our conversation within a session, and I store important facts in long-term memory across sessions.",
+          { parse_mode: "Markdown" }
+        );
+        break;
+      }
+
+      default:
+        // Unknown command — treat as regular message
+        await this.bot.sendMessage(chatId, `Unknown command: ${cmd}\nType /help for available commands.`);
     }
   }
 
@@ -135,7 +229,7 @@ class TelegramAdapter {
 
       return transcript || null;
     } finally {
-      console.log(`[telegram] Voice file kept at: ${localPath}`);
+      try { require("fs").unlinkSync(localPath); } catch {}
     }
   }
 }
