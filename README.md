@@ -68,11 +68,30 @@ sudo cp kiro-telegram-bot.service /etc/systemd/system/
 sudo systemctl enable --now kiro-telegram-bot
 ```
 
-## How is this different from OpenClaw?
+## Setting up your Telegram bot
 
-[OpenClaw](https://github.com/openclaw/openclaw) has a sophisticated memory system with daily logs, curated long-term memory, and session-aware context injection. This project brings a simplified version of that idea to Kiro CLI:
+1. **Open Telegram** and search for [@BotFather](https://t.me/BotFather)
+2. Send `/newbot` and follow the prompts:
+   - Choose a **display name** (e.g. "Kiro Assistant")
+   - Choose a **username** — must end in `bot` (e.g. `my_kiro_bot`)
+3. BotFather will reply with your **bot token** (looks like `123456789:ABCdefGHI...`). Copy it into your `.env` file as `TELEGRAM_BOT_TOKEN`.
+4. **Get your Telegram user ID** — send any message to [@userinfobot](https://t.me/userinfobot) and it will reply with your numeric ID. Put it in `ALLOWED_USERS` so only you can use the bot.
+5. **Start a chat** with your new bot — search for its username in Telegram and press **Start**.
+6. Run `npm start` and send a message — you should get a reply from Kiro!
 
-- OpenClaw: `MEMORY.md` + `memory/YYYY-MM-DD.md` daily files + semantic search
-- This bot: `MEMORY.md` per user, maintained by Kiro via steering instructions
+### Optional: set bot commands in Telegram
 
-It's not as powerful, but it gives Kiro a sense of continuity that the bare CLI lacks.
+The bot registers its commands automatically on startup, but you can also set them manually via BotFather:
+
+1. Send `/setcommands` to @BotFather
+2. Select your bot
+3. Paste:
+   ```
+   new - Start a fresh conversation
+   memory - Show what Kiro remembers about you
+   clear - Clear long-term memory
+   sessions - List saved chat sessions
+   help - Show available commands
+   ```
+
+This makes the commands appear in Telegram's `/` menu when chatting with your bot.
