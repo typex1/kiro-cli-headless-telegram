@@ -34,6 +34,11 @@ Telegram → Node.js server → kiro-cli chat --resume --no-interactive → resp
 
 ### Memory architecture
 
+For those who are curious: the two **memory.md** files serve different purposes:
+
+- MEMORY.md — This is my long-term memory file. I read and write to it during our conversations to remember things about you, your projects, preferences, etc. It persists across conversations so I can pick up where we left off.
+
+- .kiro/steering/memory.md — This is a steering file that contains instructions telling me how to use MEMORY.md. It defines the rules: when to read it, when to update it, what format to use, and what not to store (like passwords).
 ```
 workspace/
 ├── users/
