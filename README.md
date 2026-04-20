@@ -13,9 +13,10 @@ Telegram bot that forwards messages to [Kiro CLI](https://kiro.dev/docs/cli/) ru
 ## Prerequisites
 
 - Node.js 18+
-- [Kiro CLI v2](https://kiro.dev/docs/cli/) installed
+- [Kiro CLI v2](https://kiro.dev/docs/cli/) installed, Pro license active, and API key generated
 - Kiro API key ([generate one](https://app.kiro.dev)) — requires Pro/Pro+/Power subscription
 - Telegram bot token from [@BotFather](https://t.me/BotFather)
+- If you want Telegram Speech-to-text, also create an API key at https://console.groq.com/keys
 
 ## Setup
 
