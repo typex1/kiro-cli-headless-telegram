@@ -310,35 +310,62 @@ class SignalAdapter {
   async _transcribeVoice(attachment) {
     if (!process.env.GROQ_API_KEY) return null;
 
-    // signal-cli stores attachments locally; find the file
-    const attachmentPath = attachment.file || attachment.id;
-    if (!attachmentPath || !fs.existsSync(attachmentPath)) {
-      // Try the signal-cli data directory
-      const signalDir = path.join(
+    // signal-cli 0.14+ stores attachments in a flat directory
+    // The attachment object may have: file (full path), id, or filename
+    let filePath = null;
+
+    // Option 1: attachment.file is already a full path
+    if (attachment.file && fs.existsSync(attachment.file)) {
+      filePath = attachment.file;
+    }
+
+    // Option 2: check the flat attachments directory
+    if (!filePath) {
+      const signalAttachDir = path.join(
         os.homedir(),
         ".local",
         "share",
         "signal-cli",
-        "data",
-        this.account,
         "attachments"
       );
-      const possiblePath = path.join(signalDir, attachment.id);
-      if (!fs.existsSync(possiblePath)) {
-        throw new Error("Voice attachment file not found");
+
+      // Try attachment.id or attachment.filename
+      const candidates = [
+        attachment.id,
+        attachment.filename,
+        attachment.id && attachment.id.replace(/[^a-zA-Z0-9._-]/g, ""),
+      ].filter(Boolean);
+
+      for (const name of candidates) {
+        const candidate = path.join(signalAttachDir, name);
+        if (fs.existsSync(candidate)) {
+          filePath = candidate;
+          break;
+        }
+      }
+
+      // If still not found, try listing recent files matching audio extensions
+      if (!filePath) {
+        try {
+          const files = fs.readdirSync(signalAttachDir)
+            .filter((f) => /\.(m4a|ogg|mp3|opus|wav|aac)$/i.test(f))
+            .map((f) => ({
+              name: f,
+              mtime: fs.statSync(path.join(signalAttachDir, f)).mtimeMs,
+            }))
+            .sort((a, b) => b.mtime - a.mtime);
+
+          if (files.length > 0 && Date.now() - files[0].mtime < 30000) {
+            // Most recent audio file within last 30 seconds
+            filePath = path.join(signalAttachDir, files[0].name);
+          }
+        } catch {}
       }
     }
 
-    const filePath = attachment.file || path.join(
-      os.homedir(),
-      ".local",
-      "share",
-      "signal-cli",
-      "data",
-      this.account,
-      "attachments",
-      attachment.id
-    );
+    if (!filePath) {
+      throw new Error("Voice attachment file not found");
+    }
 
     try {
       const transcript = execSync(
