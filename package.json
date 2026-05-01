@@ -1,12 +1,12 @@
 {
-  "name": "kiro-headless-telegram-bot",
-  "version": "2.0.0",
-  "description": "Connect Kiro CLI (headless mode) to Telegram",
+  "name": "kiro-headless-bot",
+  "version": "3.0.0",
+  "description": "Connect Kiro CLI (headless mode) to Telegram and Signal",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js"
   },
-  "keywords": ["kiro", "telegram", "headless", "ai-agent"],
+  "keywords": ["kiro", "telegram", "signal", "signal-cli", "headless", "ai-agent"],
   "license": "MIT-0",
   "dependencies": {
     "node-telegram-bot-api": "^0.66.0"
