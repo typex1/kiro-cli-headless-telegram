@@ -13,6 +13,7 @@ const TelegramBot = require("node-telegram-bot-api");
 const { execSync } = require("child_process");
 const os = require("os");
 const path = require("path");
+const fs = require("fs");
 
 const TELEGRAM_MAX_LENGTH = 4096;
 
@@ -103,7 +104,9 @@ class TelegramAdapter {
       const response = await this.kiro.prompt(text, userId);
       clearInterval(typingInterval);
 
-      await this._sendResponse(chatId, response || "_(no response)_");
+      const { text: cleanText, files } = this._extractFiles(response || "_(no response)_", userId);
+      await this._sendResponse(chatId, cleanText);
+      await this._sendFiles(chatId, files);
       console.log(`[telegram] OUT to ${userId}: ${(response || "").slice(0, 100)}`);
     } catch (err) {
       console.error(`[telegram] Error:`, err.message);
@@ -129,13 +132,9 @@ class TelegramAdapter {
 
           const greeting = args.length
             ? args.join(" ")
-            : "Hello! I'm starting a fresh conversation. I'll check my memory for context about you.";
+            : "Hello! Starting a fresh conversation.";
 
-          const response = await this.kiro.prompt(
-            `Read MEMORY.md first to recall what you know about me, then respond to: ${greeting}`,
-            userId,
-            { newSession: true }
-          );
+          const response = await this.kiro.prompt(greeting, userId, { newSession: true });
           clearInterval(typingInterval);
 
           await this._sendResponse(chatId, "🔄 *New conversation started.*\n\n" + (response || "Ready!"));
@@ -208,6 +207,55 @@ class TelegramAdapter {
       await this.bot.sendMessage(chatId, part, { parse_mode: "Markdown" }).catch(() =>
         this.bot.sendMessage(chatId, part)
       );
+    }
+  }
+
+  /**
+   * Extract [SEND_FILE:path] markers from Kiro's response.
+   * Resolves relative paths against the user's workspace.
+   */
+  _extractFiles(response, userId) {
+    const filePattern = /\[SEND_FILE:([^\]]+)\]/g;
+    const files = [];
+    let match;
+
+    while ((match = filePattern.exec(response)) !== null) {
+      let filePath = match[1].trim();
+      // Resolve relative paths against user workspace
+      if (!path.isAbsolute(filePath)) {
+        const userWs = this.kiro._userWorkspace(userId);
+        filePath = path.resolve(userWs, filePath);
+      }
+      if (fs.existsSync(filePath)) {
+        files.push(filePath);
+      }
+    }
+
+    // Strip markers from text
+    const text = response.replace(filePattern, "").replace(/\n{3,}/g, "\n\n").trim();
+    return { text: text || "_(file attached)_", files };
+  }
+
+  /**
+   * Send extracted files as Telegram documents or photos.
+   */
+  async _sendFiles(chatId, files) {
+    const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
+
+    for (const filePath of files) {
+      try {
+        const ext = path.extname(filePath).toLowerCase();
+        if (IMAGE_EXTS.has(ext)) {
+          await this.bot.sendPhoto(chatId, filePath);
+        } else {
+          await this.bot.sendDocument(chatId, filePath, {}, {
+            filename: path.basename(filePath),
+          });
+        }
+      } catch (err) {
+        console.error(`[telegram] Failed to send file ${filePath}:`, err.message);
+        await this.bot.sendMessage(chatId, `❌ Could not send file: ${path.basename(filePath)}`);
+      }
     }
   }
 

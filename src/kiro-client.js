@@ -20,27 +20,14 @@ const TIMEOUT = parseInt(process.env.KIRO_TIMEOUT || "120000", 10);
 // Steering instructions that teach Kiro to maintain MEMORY.md
 const STEERING_CONTENT = `# Memory Instructions
 
-You have access to a file called \`MEMORY.md\` in the current workspace.
-This is your long-term memory — it persists across conversations.
+You have a long-term memory that persists across conversations.
+Your current memory is injected at the start of each message as context.
 
-## On every conversation start
+## Updating Memory
 
-Read \`MEMORY.md\` at the beginning of the conversation (if it exists) to recall previous context.
+When you learn important facts, preferences, or context about the user, output a memory update block at the END of your response using this exact format:
 
-## During conversation
-
-When you learn important facts, preferences, or context about the user, **update MEMORY.md** using your file tools:
-- User's name, preferences, projects they're working on
-- Important decisions or outcomes
-- Recurring topics or interests
-- Technical setup details (languages, frameworks, infra)
-- Anything they explicitly ask you to remember
-
-## Format
-
-Keep MEMORY.md organized with sections:
-
-\`\`\`markdown
+[MEMORY_UPDATE]
 # Memory
 
 ## About the User
@@ -54,14 +41,43 @@ Keep MEMORY.md organized with sections:
 
 ## Notes
 - Other important context...
-\`\`\`
+[/MEMORY_UPDATE]
+
+The block must contain the COMPLETE updated memory (it replaces the previous memory entirely).
+
+## When to Update Memory
+
+- User shares their name, preferences, projects, or technical setup
+- Important decisions or outcomes are reached
+- User explicitly says "remember this" or similar
+- You notice recurring topics or interests
+- NOT every message — only when there's something new worth remembering
 
 ## Rules
-- Be selective — don't dump every detail, just what matters
+- Be selective — only store what matters for future conversations
 - Update existing entries rather than duplicating
 - Remove outdated info when you notice it
 - Never store passwords, tokens, or secrets
-- When the user says "remember this" or similar, always update MEMORY.md
+- Keep it concise — aim for under 50 lines
+
+## Sending Files
+
+When the user asks you to send them a file, include a special marker in your response:
+
+\`[SEND_FILE:/absolute/path/to/file]\`
+
+Or for files relative to the current workspace:
+
+\`[SEND_FILE:relative/path/to/file]\`
+
+The bot will detect these markers, send the file as a Telegram document, and strip the marker from the displayed text.
+
+**Examples:**
+- User: "Send me the README" → include \`[SEND_FILE:README.md]\` in your response
+- User: "Send me my memory file" → include \`[SEND_FILE:MEMORY.md]\` in your response
+- You can include multiple \`[SEND_FILE:...]\` markers to send multiple files
+- Always verify the file exists before including the marker (use your file tools to check)
+- Add a brief text response alongside the marker (e.g., "Here's the file you asked for.")
 `;
 
 class KiroClient {
@@ -99,6 +115,47 @@ class KiroClient {
   }
 
   /**
+   * Build the augmented prompt with memory context and update instructions.
+   */
+  _buildPromptWithMemory(text, userId) {
+    const memory = this.getMemory(userId);
+    const hasMemory = memory && !memory.includes("No memories yet") && !memory.includes("No memories stored") && !memory.includes("Cleared. Starting fresh");
+
+    let prompt = "";
+
+    if (hasMemory) {
+      prompt += `[LONG-TERM MEMORY - context from previous conversations]\n${memory}\n[/LONG-TERM MEMORY]\n\n`;
+    }
+
+    prompt += `User message: ${text}\n\n`;
+    prompt += `[SYSTEM INSTRUCTION: If you learned anything new and important about the user in this exchange (name, preferences, projects, interests, technical details, or anything they asked you to remember), append a memory update block at the very end of your response in this exact format:\n[MEMORY_UPDATE]\n# Memory\n\n## About the User\n- facts...\n\n## Notes\n- other context...\n[/MEMORY_UPDATE]\nThe block must contain the COMPLETE updated memory (it replaces previous memory). Only include this block when there is genuinely new info to store. Do NOT include it for casual/trivial exchanges.]`;
+
+    return prompt;
+  }
+
+  /**
+   * Extract [MEMORY_UPDATE]...[/MEMORY_UPDATE] block from response and persist it.
+   * Returns the response text with the memory block stripped.
+   */
+  _processMemoryUpdate(response, userId) {
+    const memoryPattern = /\[MEMORY_UPDATE\]\s*([\s\S]*?)\s*\[\/MEMORY_UPDATE\]/;
+    const match = response.match(memoryPattern);
+
+    if (match) {
+      const newMemory = match[1].trim();
+      if (newMemory.length > 10) { // Sanity check — don't write empty/trivial content
+        const ws = this._userWorkspace(userId);
+        const memoryPath = path.join(ws, "MEMORY.md");
+        fs.writeFileSync(memoryPath, newMemory + "\n", "utf-8");
+        console.log(`[kiro] Memory updated for user ${userId} (${newMemory.length} chars)`);
+      }
+      // Strip the memory block from the visible response
+      return response.replace(memoryPattern, "").replace(/\n{3,}/g, "\n\n").trim();
+    }
+    return response;
+  }
+
+  /**
    * Send a prompt to Kiro, resuming the existing conversation.
    * @param {string} text - User's message
    * @param {string} userId - Telegram user ID for workspace isolation
@@ -107,6 +164,7 @@ class KiroClient {
    */
   prompt(text, userId, opts = {}) {
     const workspace = this._ensureWorkspace(userId);
+    const augmentedText = this._buildPromptWithMemory(text, userId);
 
     return new Promise((resolve, reject) => {
       const args = ["chat", "--no-interactive", "--trust-all-tools"];
@@ -116,7 +174,7 @@ class KiroClient {
         args.push("--resume");
       }
 
-      args.push(text);
+      args.push(augmentedText);
 
       execFile(KIRO_CLI, args, {
         cwd: workspace,
@@ -127,7 +185,9 @@ class KiroClient {
         if (stderr) console.error("[kiro]", stderr.trim());
         if (err) return reject(new Error(err.message));
         // Strip ANSI escape codes
-        const clean = stdout.replace(/\x1B\[[0-9;]*[A-Za-z]/g, "").trim();
+        let clean = stdout.replace(/\x1B\[[0-9;]*[A-Za-z]/g, "").trim();
+        // Process and persist any memory updates from the response
+        clean = this._processMemoryUpdate(clean, userId);
         resolve(clean);
       });
     });
